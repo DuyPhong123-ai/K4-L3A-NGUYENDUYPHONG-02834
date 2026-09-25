@@ -10,15 +10,15 @@ from .trace import TraceWriter
 TOPIC_ROUTES: dict[str, tuple[str, ...]] = {
     "canceled_order_paid": ("order-item-agent", "payment-agent"),
     "unavailable_order_paid": ("order-item-agent", "payment-agent"),
-    "late_delivery_seller": ("shipment-agent", "order-item-agent"),
-    "late_delivery_logistics": ("shipment-agent",),
+    "late_delivery_seller": ("order-item-agent", "shipment-agent"),
+    "late_delivery_logistics": ("order-item-agent", "shipment-agent"),
     "valid_split_payment": ("payment-agent",),
     "payment_mismatch": ("payment-agent", "order-item-agent"),
     "duplicate_charge": ("payment-agent",),
     "refund_pending": ("payment-agent",),
     "refund_failed": ("payment-agent",),
     "requested_full_refund": ("policy-agent",),
-    "unsupported_claim": ("verifier",),
+    "unsupported_claim": ("order-item-agent", "shipment-agent", "payment-agent"),
 }
 
 ISSUE_TOOLS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -33,38 +33,49 @@ ISSUE_TOOLS: dict[str, tuple[tuple[str, str], ...]] = {
         ("payment-agent", "get_order_payments"),
     ),
     "late_delivery_seller": (
+        ("order-item-agent", "get_order"),
         ("shipment-agent", "get_shipment_summary"),
         ("order-item-agent", "get_order_items"),
         ("order-item-agent", "get_sellers"),
     ),
     "late_delivery_logistics": (
+        ("order-item-agent", "get_order"),
         ("shipment-agent", "get_shipment_summary"),
         ("order-item-agent", "get_order_items"),
     ),
     "valid_split_payment": (
+        ("order-item-agent", "get_order"),
         ("payment-agent", "get_order_payments"),
         ("payment-agent", "get_payment_timeline"),
     ),
     "payment_mismatch": (
+        ("order-item-agent", "get_order"),
         ("payment-agent", "get_order_payments"),
         ("payment-agent", "get_payment_timeline"),
         ("order-item-agent", "get_order_items"),
     ),
     "duplicate_charge": (
+        ("order-item-agent", "get_order"),
         ("payment-agent", "get_order_payments"),
         ("payment-agent", "get_payment_timeline"),
     ),
     "refund_pending": (
+        ("order-item-agent", "get_order"),
         ("payment-agent", "get_order_payments"),
         ("payment-agent", "get_payment_timeline"),
         ("payment-agent", "get_refund_timeline"),
     ),
     "refund_failed": (
+        ("order-item-agent", "get_order"),
         ("payment-agent", "get_order_payments"),
         ("payment-agent", "get_payment_timeline"),
         ("payment-agent", "get_refund_timeline"),
     ),
-    "unsupported_claim": (("order-item-agent", "get_order"),),
+    "unsupported_claim": (
+        ("order-item-agent", "get_order"),
+        ("shipment-agent", "get_shipment_summary"),
+        ("payment-agent", "get_order_payments"),
+    ),
 }
 
 
@@ -179,7 +190,9 @@ def _build_output(
     refund = _money(rule.get("refund_brl"))
     action = str(rule.get("recommended_action", "document_no_action"))
     case_status = str(rule.get("case_status", "needs_investigation"))
-    responsible = _responsible_parties(rule.get("responsible_parties"))
+    responsible = _responsible_parties(
+        rule.get("responsible_parties"), entities.get("seller_ids")
+    )
 
     claim_assessments = []
     for claim in plan["claims"]:
@@ -328,7 +341,9 @@ def _append_row_conflicts(
                 return
 
 
-def _responsible_parties(value: Any) -> list[dict[str, Any]]:
+def _responsible_parties(
+    value: Any, seller_ids: list[str] | None = None
+) -> list[dict[str, Any]]:
     allowed = {
         "seller", "platform", "logistics_provider", "payment_provider",
         "customer", "unknown",
@@ -342,10 +357,14 @@ def _responsible_parties(value: Any) -> list[dict[str, Any]]:
             if party_type not in allowed:
                 party_type = "unknown"
             party_id = party.get("party_id")
+            if party_type == "seller" and seller_ids:
+                party_id = seller_ids[0]
+            elif not isinstance(party_id, str):
+                party_id = None
             result.append(
                 {
                     "party_type": party_type,
-                    "party_id": party_id if isinstance(party_id, str) else None,
+                    "party_id": party_id,
                 }
             )
     return result or [{"party_type": "unknown", "party_id": None}]
