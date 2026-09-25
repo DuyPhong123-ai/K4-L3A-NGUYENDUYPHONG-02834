@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,8 +24,26 @@ class EvidenceGateway:
 
     async def call(self, tool_name: str, *, case_id: str, **arguments: str) -> dict[str, Any]:
         payload = {"case_id": case_id, **arguments}
-        result = await self._session.call_tool(tool_name, arguments=payload)
-        if result.isError:
+        last_error: Exception | None = None
+        result = None
+        for attempt in range(3):
+            try:
+                result = await self._session.call_tool(tool_name, arguments=payload)
+            except Exception as exc:  # SDK exposes transport/server failures through several types.
+                last_error = exc
+                if attempt == 2:
+                    raise RuntimeError(
+                        f"MCP tool {tool_name} failed after 3 attempts: {exc}"
+                    ) from exc
+                await asyncio.sleep(0.5 * (attempt + 1))
+            else:
+                break
+        if result is None:  # Defensive guard; the loop either returns a result or raises.
+            raise RuntimeError(f"MCP tool {tool_name} failed: {last_error}")
+        is_error = getattr(result, "isError", None)
+        if is_error is None:
+            is_error = getattr(result, "is_error", False)
+        if is_error:
             message = " ".join(
                 block.text for block in result.content if getattr(block, "text", None)
             )
